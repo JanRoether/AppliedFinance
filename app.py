@@ -27,8 +27,6 @@ def ist_ungueltig(wert):
 # ─── KPI-Scoring (Score 0–100) ────────────────────────────────────────────────
 # Vier fundamentale Kennzahlen, jede wird auf eine Skala von 0 (unterbewertet)
 # bis 100 (überbewertet) abgebildet und anschließend gewichtet kombiniert.
-W_PE, W_ROE, W_DE, W_EBITDA = 0.35, 0.25, 0.15, 0.25
-
 def score_pe(wert):
     if ist_ungueltig(wert) or wert <= 0:
         return None
@@ -112,6 +110,38 @@ with st.sidebar:
     )
     st.button("Analysieren", type="primary", use_container_width=True)
 
+    st.markdown("---")
+    st.markdown("### ⚖️ KPI-Gewichtung")
+    st.caption("Passe die Gewichtung an den Sektor an. Wird automatisch auf 100 % normalisiert.")
+
+    w_pe     = st.slider("📊 P/E Ratio",  0, 100, 35, step=5,
+                         help="Universellste Bewertungskennzahl — Standard: 35 %")
+    w_roe    = st.slider("💹 ROE",         0, 100, 25, step=5,
+                         help="Qualitätsmerkmal des Geschäftsmodells — Standard: 25 %")
+    w_de     = st.slider("🏦 D/E Ratio",   0, 100, 15, step=5,
+                         help="Verschuldungsrisiko (sektorsensitiv) — Standard: 15 %")
+    w_ebitda = st.slider("📈 EV/EBITDA",   0, 100, 25, step=5,
+                         help="Kapitalstruktur-neutrale Bewertung — Standard: 25 %")
+
+    gesamt_w = w_pe + w_roe + w_de + w_ebitda
+    if gesamt_w > 0:
+        wn_pe, wn_roe, wn_de, wn_ebitda = (
+            w_pe / gesamt_w, w_roe / gesamt_w,
+            w_de / gesamt_w, w_ebitda / gesamt_w
+        )
+    else:
+        wn_pe = wn_roe = wn_de = wn_ebitda = 0.25
+
+    st.markdown(f"""
+**Normalisierte Gewichte:**
+| KPI | Gewicht |
+|-----|---------|
+| P/E Ratio | **{wn_pe*100:.1f} %** |
+| ROE | **{wn_roe*100:.1f} %** |
+| D/E Ratio | **{wn_de*100:.1f} %** |
+| EV/EBITDA | **{wn_ebitda*100:.1f} %** |
+""")
+
 # ─── Hauptbereich ─────────────────────────────────────────────────────────────
 st.title("📈 Aktien KPI Analyser")
 
@@ -173,10 +203,10 @@ de_score     = score_de(de_wert)
 ebitda_score = score_ebitda(ebitda_wert)
 
 score_gewicht_paare = [
-    (pe_score,     W_PE),
-    (roe_score,    W_ROE),
-    (de_score,     W_DE),
-    (ebitda_score, W_EBITDA),
+    (pe_score,     wn_pe),
+    (roe_score,    wn_roe),
+    (de_score,     wn_de),
+    (ebitda_score, wn_ebitda),
 ]
 gesamt_score, gesamt_label, gesamt_farbe, anz_daten = gesamtbewertung(score_gewicht_paare)
 
@@ -187,13 +217,13 @@ ebitda_wert_str = f"{ebitda_wert:.1f}x"  if not ist_ungueltig(ebitda_wert) else 
 
 kpi_liste = [
     {"name": "P/E Ratio",  "untertitel": "Kurs-Gewinn-Verhältnis",   "wert": pe_wert_str,
-     "score": pe_score,     "gewicht": W_PE},
+     "score": pe_score,     "gewicht": wn_pe},
     {"name": "ROE",        "untertitel": "Eigenkapitalrendite",       "wert": roe_wert_str,
-     "score": roe_score,    "gewicht": W_ROE},
+     "score": roe_score,    "gewicht": wn_roe},
     {"name": "D/E Ratio",  "untertitel": "Verschuldungsgrad",         "wert": de_wert_str,
-     "score": de_score,     "gewicht": W_DE},
+     "score": de_score,     "gewicht": wn_de},
     {"name": "EV/EBITDA",  "untertitel": "Enterprise Value / EBITDA", "wert": ebitda_wert_str,
-     "score": ebitda_score, "gewicht": W_EBITDA},
+     "score": ebitda_score, "gewicht": wn_ebitda},
 ]
 
 # ─── Tabs ─────────────────────────────────────────────────────────────────────
@@ -202,6 +232,20 @@ t1, t2 = st.tabs(["🎯 Fundamentalbewertung", "📉 Kursverlauf"])
 # ── TAB 1: Fundamentalbewertung ───────────────────────────────────────────────
 with t1:
     st.subheader("Fundamentalbewertung")
+
+    with st.expander("ℹ️ Methodik & Begründung der KPI-Auswahl"):
+        st.markdown("""
+**Bewertungsmodell – 4 KPIs der Fundamentalanalyse**
+
+| KPI | Begründung | Standard-Gewicht |
+|-----|-----------|-----------------|
+| **P/E (Kurs-Gewinn-Verhältnis)** | Universellste Bewertungskennzahl. Misst direkt, wie viel Anleger pro Euro Gewinn zahlen. | **35 %** |
+| **ROE (Eigenkapitalrendite)** | Qualitätsmerkmal des Geschäftsmodells. Hohe ROE (>15 %) signalisiert effizienten Kapitaleinsatz und rechtfertigt Bewertungsprämien (Buffett-Prinzip). | **25 %** |
+| **EV/EBITDA** | Kapitalstruktur-neutrale Ergänzung zum P/E – verhindert Verzerrungen bei unterschiedlich hoch verschuldeten Unternehmen. | **25 %** |
+| **D/E (Verschuldungsgrad)** | Risikoindikator für Finanzierungsstruktur. Erhält das niedrigste Gewicht, da Branchennormen stark variieren (Banken, Versorger naturgemäß höher verschuldet). | **15 %** |
+
+**Score-Logik (pro KPI: 0–100):** Gewichteter Durchschnitt → **< 38 Unterbewertet · 38–60 Fair · > 60 Überbewertet**
+        """)
 
     cols = st.columns(4)
     for i, kpi in enumerate(kpi_liste):
@@ -267,6 +311,42 @@ with t1:
             </p>
         </div>
         """, unsafe_allow_html=True)
+
+    st.markdown("---")
+
+    col_pie, col_bar = st.columns(2)
+    with col_pie:
+        fig_pie = go.Figure(go.Pie(
+            labels=["P/E Ratio", "ROE", "D/E Ratio", "EV/EBITDA"],
+            values=[wn_pe*100, wn_roe*100, wn_de*100, wn_ebitda*100],
+            hole=0.42,
+            marker_colors=["#2196F3", "#4CAF50", "#FF9800", "#9C27B0"],
+            textinfo="label+percent",
+        ))
+        fig_pie.update_layout(title="Gewichtungsverteilung", height=300,
+                              margin=dict(t=40, b=0, l=0, r=0), showlegend=False)
+        st.plotly_chart(fig_pie, use_container_width=True)
+
+    with col_bar:
+        kpi_scores = [pe_score, roe_score, de_score, ebitda_score]
+        fig_bar = go.Figure(go.Bar(
+            x=["P/E Ratio", "ROE", "D/E Ratio", "EV/EBITDA"],
+            y=[s if s is not None else 0 for s in kpi_scores],
+            marker_color=[kpi_farbe(s) for s in kpi_scores],
+            text=[str(s) if s is not None else "–" for s in kpi_scores],
+            textposition="outside",
+        ))
+        fig_bar.add_hline(y=38, line_dash="dash", line_color="#ffd600",
+                          annotation_text="38 – Grenze Unter/Fair", annotation_position="top left")
+        fig_bar.add_hline(y=60, line_dash="dash", line_color="#dd2c00",
+                          annotation_text="60 – Grenze Fair/Über", annotation_position="top left")
+        if gesamt_score is not None:
+            fig_bar.add_hline(y=gesamt_score, line_dash="dot", line_color=gesamt_farbe,
+                              annotation_text=f"Gesamtscore: {gesamt_score:.1f}",
+                              annotation_position="bottom right")
+        fig_bar.update_layout(title="KPI-Scores (0 = unterbewertet, 100 = überbewertet)",
+                              yaxis=dict(range=[0, 105], title="Score"), height=300)
+        st.plotly_chart(fig_bar, use_container_width=True)
 
 # ── TAB 2: Kursverlauf ────────────────────────────────────────────────────────
 with t2:
