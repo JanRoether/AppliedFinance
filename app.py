@@ -18,10 +18,15 @@ st.set_page_config(
 )
 
 # ─── Session State ────────────────────────────────────────────────────────────
+if "ticker" not in st.session_state:
+    st.session_state.ticker = ""
 if "ki_analyse" not in st.session_state:
     st.session_state.ki_analyse = None
 if "ki_ticker" not in st.session_state:
     st.session_state.ki_ticker = None
+
+def waehle_ticker(t):
+    st.session_state.ticker = t
 
 # ─── Hilfsfunktionen ──────────────────────────────────────────────────────────
 def fmt_gross(wert):
@@ -240,10 +245,15 @@ Antworte ausschließlich auf Deutsch. Halte dich strikt an das vorgegebene Forma
 with st.sidebar:
     st.title("📈 Aktien Analyse")
     st.markdown("---")
-    ticker = st.text_input(
-        "Ticker-Symbol", value="AAPL",
+    ticker_eingabe = st.text_input(
+        "Ticker-Symbol",
+        value=st.session_state.ticker,
+        placeholder="z. B. AAPL, SAP.DE …",
         help="z. B. AAPL, MSFT, GOOGL, SAP.DE, BMW.DE"
     )
+    if ticker_eingabe.strip().upper() != st.session_state.ticker:
+        st.session_state.ticker = ticker_eingabe.strip().upper()
+
     st.button("Analysieren", type="primary", use_container_width=True)
 
     st.markdown("---")
@@ -278,8 +288,44 @@ with st.sidebar:
 | EV/EBITDA | **{wn_ebitda*100:.1f} %** |
 """)
 
+    st.markdown("---")
+    st.markdown("**Schnellauswahl:**")
+    for label, tickers in [
+        ("🇺🇸 USA",         ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "TSLA", "META", "BRK-B"]),
+        ("🇩🇪 Deutschland", ["SAP.DE", "BMW.DE", "SIE.DE", "ALV.DE", "VOW3.DE"]),
+        ("🇨🇭 Schweiz",     ["NESN.SW", "NOVN.SW"]),
+    ]:
+        st.caption(label)
+        cols = st.columns(2)
+        for i, t in enumerate(tickers):
+            cols[i % 2].button(t, key=f"btn_{t}", use_container_width=True,
+                               on_click=waehle_ticker, args=(t,))
+
+    st.markdown("---")
+    st.markdown("""
+**Bewertungsskala:**
+🟢 Unterbewertet (Score < 38)
+🟡 Fair bewertet  (Score 38–60)
+🔴 Überbewertet   (Score > 60)
+""")
+
+ticker = st.session_state.ticker
+
 # ─── Hauptbereich ─────────────────────────────────────────────────────────────
 st.title("📈 Aktien KPI Analyser")
+
+if not ticker:
+    st.markdown("""
+    <div style="text-align:center; padding: 80px 20px; color:#8b949e;">
+        <div style="font-size:4rem;">📈</div>
+        <h2 style="color:#f0f6fc; margin:20px 0 10px 0;">Aktien-Fundamentalanalyse</h2>
+        <p style="font-size:1.1rem; margin-bottom:8px;">
+            Gib links ein Ticker-Symbol ein oder wähle eine Aktie aus der Schnellauswahl.
+        </p>
+        <p style="font-size:0.9rem;">z. B. <code>AAPL</code> · <code>MSFT</code> · <code>SAP.DE</code> · <code>NESN.SW</code></p>
+    </div>
+    """, unsafe_allow_html=True)
+    st.stop()
 
 with st.spinner("Lade Marktbenchmarks via Web Scraping…"):
     sp500_pe       = scrape_sp500_pe()
@@ -294,7 +340,7 @@ with st.spinner(f"Lade Finanzdaten für **{ticker}** via yfinance…"):
         st.error(f"Fehler beim Laden der yfinance-Daten: {e}")
         st.stop()
 
-if not info or not info.get("quoteType"):
+if not info or not any(info.get(k) for k in ("quoteType", "longName", "shortName", "regularMarketPrice", "currentPrice")):
     st.error(f"Keine Daten für **{ticker}** gefunden. Bitte Ticker-Symbol prüfen.")
     st.stop()
 
@@ -362,15 +408,28 @@ roe_wert_str    = f"{roe_wert*100:.1f} %" if not ist_ungueltig(roe_wert)    else
 de_wert_str     = f"{de_wert:.1f} %"     if not ist_ungueltig(de_wert)     else "–"
 ebitda_wert_str = f"{ebitda_wert:.1f}x"  if not ist_ungueltig(ebitda_wert) else "–"
 
+if sp500_pe and not ist_ungueltig(pe_wert):
+    pe_ref_text = f"Markt: {sp500_pe:.1f}x" + (f" | Sektor: {sektor_pe_ref:.1f}x" if sektor_pe_ref else "")
+else:
+    pe_ref_text = "Historischer Ø: ~17–22x"
+
 kpi_liste = [
     {"name": "P/E Ratio",  "untertitel": "Kurs-Gewinn-Verhältnis",   "wert": pe_wert_str,
-     "score": pe_score,     "gewicht": wn_pe},
+     "score": pe_score,     "gewicht": wn_pe,
+     "beschr": "Kurs / Gewinn (letzte 12 Monate). Niedrig = günstiger bewertet.",
+     "ref": pe_ref_text},
     {"name": "ROE",        "untertitel": "Eigenkapitalrendite",       "wert": roe_wert_str,
-     "score": roe_score,    "gewicht": wn_roe},
+     "score": roe_score,    "gewicht": wn_roe,
+     "beschr": "Nettogewinn / Eigenkapital. >15 % = gut, >25 % = exzellent.",
+     "ref": "Buffett-Benchmark: >15 %"},
     {"name": "D/E Ratio",  "untertitel": "Verschuldungsgrad",         "wert": de_wert_str,
-     "score": de_score,     "gewicht": wn_de},
+     "score": de_score,     "gewicht": wn_de,
+     "beschr": "Fremdkapital / Eigenkapital (in %). Niedrig = konservative Finanzierung.",
+     "ref": "Benchmark: <100 % konservativ"},
     {"name": "EV/EBITDA",  "untertitel": "Enterprise Value / EBITDA", "wert": ebitda_wert_str,
-     "score": ebitda_score, "gewicht": wn_ebitda},
+     "score": ebitda_score, "gewicht": wn_ebitda,
+     "beschr": "Unternehmenswert / EBITDA. Kapitalstruktur-neutral. <10x günstig.",
+     "ref": "Marktdurchschnitt: ~12–16x"},
 ]
 
 # ─── Tabs ─────────────────────────────────────────────────────────────────────
@@ -397,6 +456,8 @@ with t1:
 | **D/E (Verschuldungsgrad)** | Risikoindikator für Finanzierungsstruktur. Erhält das niedrigste Gewicht, da Branchennormen stark variieren (Banken, Versorger naturgemäß höher verschuldet). | **15 %** |
 
 **Score-Logik (pro KPI: 0–100):** Gewichteter Durchschnitt → **< 38 Unterbewertet · 38–60 Fair · > 60 Überbewertet**
+
+*Schwellenwerte basieren auf historischen Marktdurchschnittswerten (Damodaran, Graham).*
         """)
 
     cols = st.columns(4)
@@ -418,6 +479,8 @@ with t1:
                 <div style="color:#4CAF50; font-size:0.70rem; margin-top:4px">Gewicht: {gw_str}</div>
             </div>
             """, unsafe_allow_html=True)
+            st.caption(kpi["beschr"])
+            st.caption(f"📊 {kpi['ref']}")
 
     st.divider()
 
@@ -434,7 +497,7 @@ with t1:
                 gauge={
                     "axis": {"range": [0, 100], "tickvals": [0, 38, 60, 100],
                              "ticktext": ["0", "38", "60", "100"]},
-                    "bar": {"color": gesamt_farbe},
+                    "bar": {"color": "#1a1a2e", "thickness": 0.3},
                     "steps": [
                         {"range": [0,  38], "color": "#00c853"},
                         {"range": [38, 60], "color": "#ffd600"},
@@ -449,6 +512,11 @@ with t1:
 
     with col_urteil:
         gesamt_emoji = "🟢" if gesamt_label == "Unterbewertet" else ("🟡" if gesamt_label == "Fair bewertet" else "🔴")
+        details_html = "<br>".join(
+            f"• {k['name']}: Score {k['score']}/100 – {kpi_label(k['score'])} (Gewicht: {k['gewicht']*100:.0f} %)"
+            if k['score'] is not None else f"• {k['name']}: Keine Daten"
+            for k in kpi_liste
+        )
         score_display = f"{gesamt_score:.1f}/100" if gesamt_score is not None else "–"
         st.markdown(f"""
         <div style="border-left:5px solid {gesamt_farbe}; border-radius:8px;
@@ -457,6 +525,9 @@ with t1:
             <p style="color:#8b949e; margin:0 0 10px 0">
                 Gewichteter Score: <strong style="color:#f0f6fc">{score_display}</strong>
                 &nbsp;·&nbsp; Basis: <strong style="color:#f0f6fc">{anz_daten}</strong>/4 KPIs
+            </p>
+            <p style="color:#6e7681; font-size:0.82rem; line-height:1.6; margin:0 0 12px 0">
+                {details_html}
             </p>
             <p style="color:#6e7681; font-size:0.78rem; margin:0">
                 ⚠️ Score &lt; 38 = Unterbewertet · 38–60 = Fair · &gt; 60 = Überbewertet
