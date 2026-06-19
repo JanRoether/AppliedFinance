@@ -4,6 +4,7 @@ import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
 import requests
+import anthropic
 from bs4 import BeautifulSoup
 from deep_translator import GoogleTranslator
 
@@ -12,6 +13,12 @@ st.set_page_config(
     page_icon="📈",
     layout="wide"
 )
+
+# ─── Session State ────────────────────────────────────────────────────────────
+if "ki_analyse" not in st.session_state:
+    st.session_state.ki_analyse = None
+if "ki_ticker" not in st.session_state:
+    st.session_state.ki_ticker = None
 
 # ─── Hilfsfunktionen ──────────────────────────────────────────────────────────
 def fmt_gross(wert):
@@ -159,6 +166,74 @@ def kpi_label(score):
     if score <= 60:   return "Fair bewertet"
     return "Überbewertet"
 
+# ─── KI-Analyse via Claude API ────────────────────────────────────────────────
+def erstelle_ki_analyse(api_key, name, ticker_sym, sektor, pe, roe, de, ebitda,
+                        gesamt_score, gesamt_label, sp500_pe, sektor_pe):
+    """
+    Ruft die Claude API auf und liefert eine strukturierte Fundamentalanalyse.
+    Das Ausgabeformat ist fest vorgegeben, damit alle Analysen einheitlich sind.
+    """
+    pe_str     = f"{pe:.1f}x"               if not ist_ungueltig(pe)     else "nicht verfügbar"
+    roe_str    = f"{roe*100:.1f} %"          if not ist_ungueltig(roe)    else "nicht verfügbar"
+    de_str     = f"{de:.1f} %"              if not ist_ungueltig(de)     else "nicht verfügbar"
+    ebitda_str = f"{ebitda:.1f}x"           if not ist_ungueltig(ebitda) else "nicht verfügbar"
+    markt_str  = f"{sp500_pe:.1f}x"         if sp500_pe                  else "nicht verfügbar"
+    sektor_str = f"{sektor_pe:.1f}x"        if sektor_pe                 else "nicht verfügbar"
+    score_str  = f"{gesamt_score:.1f}/100"  if gesamt_score is not None  else "nicht berechnet"
+
+    prompt = f"""Du bist ein erfahrener Finanzanalyst. Analysiere die folgende Aktie anhand der bereitgestellten Fundamentalkennzahlen und erstelle eine strukturierte Bewertung.
+
+**Unternehmen:** {name} ({ticker_sym})
+**Sektor:** {sektor}
+
+**Fundamentalkennzahlen:**
+- P/E Ratio (Kurs-Gewinn-Verhältnis): {pe_str} | S&P 500 Durchschnitt: {markt_str} | Sektor-Durchschnitt: {sektor_str}
+- ROE (Eigenkapitalrendite): {roe_str} | Benchmark: >15 % gilt als gut
+- D/E Ratio (Verschuldungsgrad): {de_str} | Benchmark: <100 % gilt als konservativ
+- EV/EBITDA: {ebitda_str} | Marktdurchschnitt: ~12–16x
+
+**Modellbewertung:** {gesamt_label} (Score: {score_str})
+
+Erstelle deine Analyse EXAKT in folgendem Format – weiche nicht davon ab:
+
+## KI-Fundamentalanalyse: {name} ({ticker_sym})
+
+### 1. Kennzahlenanalyse
+
+**P/E Ratio ({pe_str}):**
+[2–3 Sätze: Einschätzung des P/E im Vergleich zum Markt- und Sektordurchschnitt. Ist die Aktie teuer oder günstig bewertet?]
+
+**ROE ({roe_str}):**
+[2–3 Sätze: Einschätzung der Eigenkapitalrendite. Wie effizient arbeitet das Unternehmen mit dem Eigenkapital?]
+
+**D/E Ratio ({de_str}):**
+[2–3 Sätze: Einschätzung des Verschuldungsgrads. Welches Finanzierungsrisiko ergibt sich daraus?]
+
+**EV/EBITDA ({ebitda_str}):**
+[2–3 Sätze: Einschätzung des EV/EBITDA. Was sagt dieser Wert über die Bewertung unabhängig von der Kapitalstruktur aus?]
+
+### 2. Gesamteinschätzung
+[3–4 Sätze: Zusammenfassung aller vier Kennzahlen. Wo liegen Stärken, wo Schwächen?]
+
+### 3. Wesentliche Risiken
+- [Risiko 1 mit kurzer Begründung]
+- [Risiko 2 mit kurzer Begründung]
+- [Risiko 3 mit kurzer Begründung]
+
+### 4. Fazit
+**Bewertungsurteil: {gesamt_label}**
+[1–2 abschließende Sätze zur Einordnung. Hinweis: Diese Analyse ersetzt keine professionelle Anlageberatung.]
+
+Antworte ausschließlich auf Deutsch. Halte dich strikt an das vorgegebene Format."""
+
+    client = anthropic.Anthropic(api_key=api_key)
+    response = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=1500,
+        messages=[{"role": "user", "content": prompt}],
+    )
+    return response.content[0].text
+
 # ─── Sidebar ──────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.title("📈 Aktien Analyse")
@@ -297,7 +372,11 @@ kpi_liste = [
 ]
 
 # ─── Tabs ─────────────────────────────────────────────────────────────────────
-t1, t2 = st.tabs(["🎯 Fundamentalbewertung", "📉 Kursverlauf"])
+t1, t2, t3 = st.tabs([
+    "🎯 Fundamentalbewertung",
+    "🤖 KI-Analyse",
+    "📉 Kursverlauf",
+])
 
 # ── TAB 1: Fundamentalbewertung ───────────────────────────────────────────────
 with t1:
@@ -419,8 +498,66 @@ with t1:
                               yaxis=dict(range=[0, 105], title="Score"), height=300)
         st.plotly_chart(fig_bar, use_container_width=True)
 
-# ── TAB 2: Kursverlauf ────────────────────────────────────────────────────────
+# ── TAB 2: KI-Analyse ─────────────────────────────────────────────────────────
 with t2:
+    st.subheader("🤖 KI-gestützte Fundamentalanalyse")
+    st.caption("Die KI bewertet die vier Kennzahlen nach einem festen Ausgabemuster für einheitliche, vergleichbare Analysen.")
+
+    try:
+        api_key = st.secrets.get("ANTHROPIC_API_KEY")
+    except Exception:
+        api_key = None
+
+    if not api_key:
+        api_key = st.text_input(
+            "Anthropic API-Key", type="password",
+            help="Erforderlich für die KI-Analyse. Erhältlich unter console.anthropic.com"
+        )
+
+    analyse_starten = st.button("🤖 KI-Analyse starten", type="primary",
+                                disabled=not api_key)
+
+    # Analyse nur neu generieren wenn Ticker sich geändert hat oder Button geklickt
+    if analyse_starten and api_key:
+        st.session_state.ki_analyse = None  # Cache löschen bei neuem Klick
+        st.session_state.ki_ticker  = None
+
+    if api_key and (st.session_state.ki_ticker != ticker or st.session_state.ki_analyse is None):
+        if analyse_starten:
+            with st.spinner("Claude analysiert die Kennzahlen…"):
+                try:
+                    ergebnis = erstelle_ki_analyse(
+                        api_key      = api_key,
+                        name         = name_unt,
+                        ticker_sym   = ticker,
+                        sektor       = sektor,
+                        pe           = pe_wert,
+                        roe          = roe_wert,
+                        de           = de_wert,
+                        ebitda       = ebitda_wert,
+                        gesamt_score = gesamt_score,
+                        gesamt_label = gesamt_label,
+                        sp500_pe     = sp500_pe,
+                        sektor_pe    = sektor_pe_ref,
+                    )
+                    st.session_state.ki_analyse = ergebnis
+                    st.session_state.ki_ticker  = ticker
+                except Exception as e:
+                    st.error(f"❌ Fehler bei der KI-Analyse: {e}")
+
+    if st.session_state.ki_analyse and st.session_state.ki_ticker == ticker:
+        st.markdown(f"""
+        <div style="border-left: 5px solid {gesamt_farbe}; border-radius: 8px;
+                    padding: 4px 20px 16px 20px; background: #0d1117; margin: 12px 0;">
+        """, unsafe_allow_html=True)
+        st.markdown(st.session_state.ki_analyse)
+        st.markdown("</div>", unsafe_allow_html=True)
+        st.caption("⚠️ KI-Ausgabe nach festem Muster generiert. Kein Ersatz für professionelle Anlageberatung.")
+    elif not analyse_starten:
+        st.info("Klicke auf **KI-Analyse starten**, um eine KI-gestützte Bewertung der Kennzahlen zu erhalten.")
+
+# ── TAB 3: Kursverlauf ────────────────────────────────────────────────────────
+with t3:
     st.subheader("Kursverlauf – letzte 12 Monate")
 
     if hist.empty:
@@ -462,5 +599,6 @@ with t2:
 st.divider()
 st.caption(
     "⚠️ **Haftungsausschluss:** Diese App dient ausschließlich zu Bildungszwecken und stellt keine "
-    "Anlageberatung dar. Finanzdaten: yfinance · Marktbenchmarks: multpl.com & finviz.com (BeautifulSoup)."
+    "Anlageberatung dar. Finanzdaten: yfinance · Marktbenchmarks: multpl.com & finviz.com (BeautifulSoup) · "
+    "KI-Analyse: Anthropic Claude."
 )
