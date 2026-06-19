@@ -5,6 +5,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import requests
 from bs4 import BeautifulSoup
+from deep_translator import GoogleTranslator
 
 st.set_page_config(
     page_title="Aktien KPI Analyse",
@@ -23,6 +24,15 @@ def fmt_gross(wert):
     if abs(wert) >= 1e6:
         return f"{wert / 1e6:.2f} Mio."
     return f"{wert:,.0f}"
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def uebersetze_de(text: str) -> str:
+    if not text:
+        return text
+    try:
+        return GoogleTranslator(source="en", target="de").translate(text[:4999])
+    except Exception:
+        return text
 
 def ist_ungueltig(wert):
     return wert is None or (isinstance(wert, float) and pd.isna(wert))
@@ -228,10 +238,12 @@ col_h1, col_h2 = st.columns([3, 2])
 with col_h1:
     st.subheader(f"🏢 {name_unt}  ({ticker})")
     st.markdown(f"**Sektor:** {sektor}  |  **Branche:** {branche}  |  **Land:** {land}")
-    beschr = info.get("longBusinessSummary", "")
-    if beschr:
+    beschr_en = info.get("longBusinessSummary", "")
+    if beschr_en:
         with st.expander("Unternehmensbeschreibung"):
-            st.write(beschr)
+            with st.spinner("Übersetze…"):
+                beschr_de = uebersetze_de(beschr_en)
+            st.write(beschr_de)
 
 with col_h2:
     m1, m2 = st.columns(2)
