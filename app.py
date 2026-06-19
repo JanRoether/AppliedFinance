@@ -1,7 +1,10 @@
+import re
 import streamlit as st
 import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
+import requests
+from bs4 import BeautifulSoup
 
 st.set_page_config(
     page_title="Aktien KPI Analyse",
@@ -23,6 +26,52 @@ def fmt_gross(wert):
 
 def ist_ungueltig(wert):
     return wert is None or (isinstance(wert, float) and pd.isna(wert))
+
+# ─── BeautifulSoup Web Scraping ───────────────────────────────────────────────
+# Zweite Datenquelle neben yfinance: Markt- und Sektor-P/E-Benchmarks werden
+# direkt von Finanzportalen gescrapt, um die KPI-Bewertung einzuordnen.
+@st.cache_data(ttl=3600, show_spinner=False)
+def scrape_sp500_pe():
+    """Scrapt den aktuellen S&P 500 P/E-Ratio von multpl.com als Marktbenchmark."""
+    try:
+        url = "https://www.multpl.com/s-p-500-pe-ratio"
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        resp = requests.get(url, headers=headers, timeout=8)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        current_div = soup.find(id="current")
+        if current_div:
+            treffer = re.findall(r"\d+[\.,]\d+", current_div.get_text())
+            if treffer:
+                return float(treffer[0].replace(",", "."))
+    except Exception:
+        pass
+    return None
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def scrape_sektor_pe():
+    """Scrapt Sektor-P/E-Benchmarks von finviz.com als kontextbezogene Vergleichswerte."""
+    benchmarks = {}
+    try:
+        url = "https://finviz.com/groups.ashx?g=sector&v=120"
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        resp = requests.get(url, headers=headers, timeout=8)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+        rows = soup.select("table.t-group tr") or soup.select("table tr")
+        for row in rows[1:]:
+            cells = row.find_all("td")
+            if len(cells) >= 3:
+                name = cells[0].get_text(strip=True)
+                pe_text = cells[2].get_text(strip=True)
+                if name and pe_text and pe_text not in ("-", ""):
+                    try:
+                        benchmarks[name] = float(pe_text)
+                    except ValueError:
+                        pass
+    except Exception:
+        pass
+    return benchmarks
 
 # ─── KPI-Scoring (Score 0–100) ────────────────────────────────────────────────
 # Vier fundamentale Kennzahlen, jede wird auf eine Skala von 0 (unterbewertet)
@@ -145,6 +194,10 @@ with st.sidebar:
 # ─── Hauptbereich ─────────────────────────────────────────────────────────────
 st.title("📈 Aktien KPI Analyser")
 
+with st.spinner("Lade Marktbenchmarks via Web Scraping…"):
+    sp500_pe       = scrape_sp500_pe()
+    sektor_pe_dict = scrape_sektor_pe()
+
 with st.spinner(f"Lade Finanzdaten für **{ticker}** via yfinance…"):
     try:
         stock = yf.Ticker(ticker)
@@ -169,6 +222,7 @@ change   = info.get("regularMarketChangePercent")
 mktcap   = info.get("marketCap")
 hoch_52w = info.get("fiftyTwoWeekHigh")
 tief_52w = info.get("fiftyTwoWeekLow")
+sektor_pe_ref = sektor_pe_dict.get(sektor)
 
 col_h1, col_h2 = st.columns([3, 2])
 with col_h1:
@@ -188,6 +242,10 @@ with col_h2:
         m2.metric("Marktkapitalisierung", fmt_gross(mktcap))
     if hoch_52w and tief_52w:
         st.markdown(f"📏 **52-Wochen-Spanne:** {tief_52w:,.2f} – {hoch_52w:,.2f}")
+    if sp500_pe:
+        st.markdown(f"📊 **S&P 500 P/E (Markt):** {sp500_pe:.1f}x")
+    if sektor_pe_ref:
+        st.markdown(f"🏭 **Sektor-P/E ({sektor}):** {sektor_pe_ref:.1f}x")
 
 st.divider()
 
@@ -234,12 +292,13 @@ with t1:
     st.subheader("Fundamentalbewertung")
 
     with st.expander("ℹ️ Methodik & Begründung der KPI-Auswahl"):
-        st.markdown("""
+        markt_zeile = f"Referenz: Benjamin Grahams Schwelle <15x, aktueller Markt {sp500_pe:.1f}x." if sp500_pe else "Historischer Marktdurchschnitt ~17–22x."
+        st.markdown(f"""
 **Bewertungsmodell – 4 KPIs der Fundamentalanalyse**
 
 | KPI | Begründung | Standard-Gewicht |
 |-----|-----------|-----------------|
-| **P/E (Kurs-Gewinn-Verhältnis)** | Universellste Bewertungskennzahl. Misst direkt, wie viel Anleger pro Euro Gewinn zahlen. | **35 %** |
+| **P/E (Kurs-Gewinn-Verhältnis)** | Universellste Bewertungskennzahl. Misst direkt, wie viel Anleger pro Euro Gewinn zahlen. {markt_zeile} | **35 %** |
 | **ROE (Eigenkapitalrendite)** | Qualitätsmerkmal des Geschäftsmodells. Hohe ROE (>15 %) signalisiert effizienten Kapitaleinsatz und rechtfertigt Bewertungsprämien (Buffett-Prinzip). | **25 %** |
 | **EV/EBITDA** | Kapitalstruktur-neutrale Ergänzung zum P/E – verhindert Verzerrungen bei unterschiedlich hoch verschuldeten Unternehmen. | **25 %** |
 | **D/E (Verschuldungsgrad)** | Risikoindikator für Finanzierungsstruktur. Erhält das niedrigste Gewicht, da Branchennormen stark variieren (Banken, Versorger naturgemäß höher verschuldet). | **15 %** |
@@ -391,5 +450,5 @@ with t2:
 st.divider()
 st.caption(
     "⚠️ **Haftungsausschluss:** Diese App dient ausschließlich zu Bildungszwecken und stellt keine "
-    "Anlageberatung dar. Finanzdaten: yfinance."
+    "Anlageberatung dar. Finanzdaten: yfinance · Marktbenchmarks: multpl.com & finviz.com (BeautifulSoup)."
 )
