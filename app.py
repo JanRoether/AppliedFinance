@@ -1,10 +1,13 @@
 import re
+import os
+os.environ.setdefault("PYTHONUTF8", "1")
+
 import streamlit as st
 import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
 import requests
-import anthropic
+from google import genai
 from bs4 import BeautifulSoup
 from deep_translator import GoogleTranslator
 
@@ -166,11 +169,11 @@ def kpi_label(score):
     if score <= 60:   return "Fair bewertet"
     return "Überbewertet"
 
-# ─── KI-Analyse via Claude API ────────────────────────────────────────────────
+# ─── KI-Analyse via Gemini API ────────────────────────────────────────────────
 def erstelle_ki_analyse(api_key, name, ticker_sym, sektor, pe, roe, de, ebitda,
                         gesamt_score, gesamt_label, sp500_pe, sektor_pe):
     """
-    Ruft die Claude API auf und liefert eine strukturierte Fundamentalanalyse.
+    Ruft die Gemini API auf und liefert eine strukturierte Fundamentalanalyse.
     Das Ausgabeformat ist fest vorgegeben, damit alle Analysen einheitlich sind.
     """
     pe_str     = f"{pe:.1f}x"               if not ist_ungueltig(pe)     else "nicht verfügbar"
@@ -226,13 +229,12 @@ Erstelle deine Analyse EXAKT in folgendem Format – weiche nicht davon ab:
 
 Antworte ausschließlich auf Deutsch. Halte dich strikt an das vorgegebene Format."""
 
-    client = anthropic.Anthropic(api_key=api_key)
-    response = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=1500,
-        messages=[{"role": "user", "content": prompt}],
+    client = genai.Client(api_key=api_key)
+    response = client.models.generate_content(
+        model="gemini-2.0-flash",
+        contents=prompt,
     )
-    return response.content[0].text
+    return response.text
 
 # ─── Sidebar ──────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -504,14 +506,14 @@ with t2:
     st.caption("Die KI bewertet die vier Kennzahlen nach einem festen Ausgabemuster für einheitliche, vergleichbare Analysen.")
 
     try:
-        api_key = st.secrets.get("ANTHROPIC_API_KEY")
+        api_key = st.secrets.get("GEMINI_API_KEY")
     except Exception:
         api_key = None
 
     if not api_key:
         api_key = st.text_input(
-            "Anthropic API-Key", type="password",
-            help="Erforderlich für die KI-Analyse. Erhältlich unter console.anthropic.com"
+            "Gemini API-Key", type="password",
+            help="Erforderlich für die KI-Analyse. Kostenlos erhältlich unter aistudio.google.com"
         )
 
     analyse_starten = st.button("🤖 KI-Analyse starten", type="primary",
@@ -524,7 +526,7 @@ with t2:
 
     if api_key and (st.session_state.ki_ticker != ticker or st.session_state.ki_analyse is None):
         if analyse_starten:
-            with st.spinner("Claude analysiert die Kennzahlen…"):
+            with st.spinner("Gemini analysiert die Kennzahlen…"):
                 try:
                     ergebnis = erstelle_ki_analyse(
                         api_key      = api_key,
@@ -552,7 +554,7 @@ with t2:
         """, unsafe_allow_html=True)
         st.markdown(st.session_state.ki_analyse)
         st.markdown("</div>", unsafe_allow_html=True)
-        st.caption("⚠️ KI-Ausgabe nach festem Muster generiert. Kein Ersatz für professionelle Anlageberatung.")
+        st.caption("⚠️ KI-Ausgabe nach festem Muster generiert. Kein Ersatz für professionelle Anlageberatung. Modell: gemini-2.0-flash")
     elif not analyse_starten:
         st.info("Klicke auf **KI-Analyse starten**, um eine KI-gestützte Bewertung der Kennzahlen zu erhalten.")
 
@@ -600,5 +602,5 @@ st.divider()
 st.caption(
     "⚠️ **Haftungsausschluss:** Diese App dient ausschließlich zu Bildungszwecken und stellt keine "
     "Anlageberatung dar. Finanzdaten: yfinance · Marktbenchmarks: multpl.com & finviz.com (BeautifulSoup) · "
-    "KI-Analyse: Anthropic Claude."
+    "KI-Analyse: Google Gemini."
 )
