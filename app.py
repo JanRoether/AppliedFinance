@@ -21,6 +21,87 @@ def fmt_gross(wert):
         return f"{wert / 1e6:.2f} Mio."
     return f"{wert:,.0f}"
 
+def ist_ungueltig(wert):
+    return wert is None or (isinstance(wert, float) and pd.isna(wert))
+
+# ─── KPI-Scoring (Score 0–100) ────────────────────────────────────────────────
+# Vier fundamentale Kennzahlen, jede wird auf eine Skala von 0 (unterbewertet)
+# bis 100 (überbewertet) abgebildet und anschließend gewichtet kombiniert.
+W_PE, W_ROE, W_DE, W_EBITDA = 0.35, 0.25, 0.15, 0.25
+
+def score_pe(wert):
+    if ist_ungueltig(wert) or wert <= 0:
+        return None
+    if wert < 10:  return 8
+    if wert < 15:  return 22
+    if wert < 20:  return 38
+    if wert < 25:  return 50
+    if wert < 30:  return 63
+    if wert < 40:  return 76
+    if wert < 55:  return 87
+    return 93
+
+def score_roe(wert):
+    if ist_ungueltig(wert):
+        return None
+    if wert > 0.35: return 12
+    if wert > 0.25: return 24
+    if wert > 0.20: return 36
+    if wert > 0.15: return 46
+    if wert > 0.10: return 57
+    if wert > 0.05: return 70
+    if wert > 0.00: return 82
+    return 92
+
+def score_de(wert):
+    if ist_ungueltig(wert):
+        return None
+    de = wert / 100 if abs(wert) > 5 else wert
+    if de < 0:    return 90
+    if de < 0.25: return 14
+    if de < 0.50: return 27
+    if de < 1.00: return 42
+    if de < 1.50: return 55
+    if de < 2.50: return 68
+    if de < 4.00: return 80
+    return 90
+
+def score_ebitda(wert):
+    if ist_ungueltig(wert) or wert <= 0:
+        return None
+    if wert < 5:  return 8
+    if wert < 8:  return 22
+    if wert < 11: return 38
+    if wert < 14: return 50
+    if wert < 18: return 63
+    if wert < 22: return 76
+    if wert < 30: return 86
+    return 93
+
+def gesamtbewertung(score_gewicht_paare):
+    gueltig = [(s, w) for s, w in score_gewicht_paare if s is not None and w > 0]
+    if not gueltig:
+        return None, "Nicht genug Daten", "#808080", 0
+    gesamt_w = sum(w for _, w in gueltig)
+    score = sum(s * w for s, w in gueltig) / gesamt_w
+    if score < 38:
+        return score, "Unterbewertet", "#00c853", len(gueltig)
+    if score <= 60:
+        return score, "Fair bewertet", "#ffd600", len(gueltig)
+    return score, "Überbewertet", "#dd2c00", len(gueltig)
+
+def kpi_farbe(score):
+    if score is None: return "#808080"
+    if score < 38:    return "#00c853"
+    if score <= 60:   return "#ffd600"
+    return "#dd2c00"
+
+def kpi_label(score):
+    if score is None: return "Keine Daten"
+    if score < 38:    return "Unterbewertet"
+    if score <= 60:   return "Fair bewertet"
+    return "Überbewertet"
+
 # ─── Sidebar ──────────────────────────────────────────────────────────────────
 with st.sidebar:
     st.title("📈 Aktien Analyse")
@@ -80,43 +161,151 @@ with col_h2:
 
 st.divider()
 
-# ─── Kursverlauf ──────────────────────────────────────────────────────────────
-st.subheader("Kursverlauf – letzte 12 Monate")
+# ─── KPI-Werte ────────────────────────────────────────────────────────────────
+pe_wert     = info.get("trailingPE")
+roe_wert    = info.get("returnOnEquity")
+de_wert     = info.get("debtToEquity")
+ebitda_wert = info.get("enterpriseToEbitda")
 
-if hist.empty:
-    st.warning("Keine historischen Kursdaten verfügbar.")
-else:
-    hist["MA50"]  = hist["Close"].rolling(50).mean()
-    hist["MA200"] = hist["Close"].rolling(200).mean()
+pe_score     = score_pe(pe_wert)
+roe_score    = score_roe(roe_wert)
+de_score     = score_de(de_wert)
+ebitda_score = score_ebitda(ebitda_wert)
 
-    fig_c = go.Figure()
-    fig_c.add_trace(go.Candlestick(
-        x=hist.index, open=hist["Open"], high=hist["High"],
-        low=hist["Low"], close=hist["Close"], name="Kurs",
-    ))
-    fig_c.add_trace(go.Scatter(
-        x=hist.index, y=hist["MA50"],
-        name="50-Tage-Ø", line=dict(color="#ff9800", width=1.5),
-    ))
-    fig_c.add_trace(go.Scatter(
-        x=hist.index, y=hist["MA200"],
-        name="200-Tage-Ø", line=dict(color="#f44336", width=1.5),
-    ))
-    fig_c.update_layout(
-        xaxis_rangeslider_visible=False,
-        yaxis_title=f"Kurs ({waehrung})",
-        height=480,
-    )
-    st.plotly_chart(fig_c, use_container_width=True)
+score_gewicht_paare = [
+    (pe_score,     W_PE),
+    (roe_score,    W_ROE),
+    (de_score,     W_DE),
+    (ebitda_score, W_EBITDA),
+]
+gesamt_score, gesamt_label, gesamt_farbe, anz_daten = gesamtbewertung(score_gewicht_paare)
 
-    erster  = hist["Close"].iloc[0]
-    letzter = hist["Close"].iloc[-1]
-    rendite = (letzter - erster) / erster * 100
+pe_wert_str     = f"{pe_wert:.1f}x"      if not ist_ungueltig(pe_wert)     else "–"
+roe_wert_str    = f"{roe_wert*100:.1f} %" if not ist_ungueltig(roe_wert)    else "–"
+de_wert_str     = f"{de_wert:.1f} %"     if not ist_ungueltig(de_wert)     else "–"
+ebitda_wert_str = f"{ebitda_wert:.1f}x"  if not ist_ungueltig(ebitda_wert) else "–"
 
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Kurs vor 12 Monaten", f"{erster:,.2f} {waehrung}")
-    c2.metric("Aktueller Kurs",       f"{letzter:,.2f} {waehrung}")
-    c3.metric("1-Jahres-Performance", f"{rendite:.2f} %", delta=f"{rendite:.2f} %")
+kpi_liste = [
+    {"name": "P/E Ratio",  "untertitel": "Kurs-Gewinn-Verhältnis",   "wert": pe_wert_str,
+     "score": pe_score,     "gewicht": W_PE},
+    {"name": "ROE",        "untertitel": "Eigenkapitalrendite",       "wert": roe_wert_str,
+     "score": roe_score,    "gewicht": W_ROE},
+    {"name": "D/E Ratio",  "untertitel": "Verschuldungsgrad",         "wert": de_wert_str,
+     "score": de_score,     "gewicht": W_DE},
+    {"name": "EV/EBITDA",  "untertitel": "Enterprise Value / EBITDA", "wert": ebitda_wert_str,
+     "score": ebitda_score, "gewicht": W_EBITDA},
+]
+
+# ─── Tabs ─────────────────────────────────────────────────────────────────────
+t1, t2 = st.tabs(["🎯 Fundamentalbewertung", "📉 Kursverlauf"])
+
+# ── TAB 1: Fundamentalbewertung ───────────────────────────────────────────────
+with t1:
+    st.subheader("Fundamentalbewertung")
+
+    cols = st.columns(4)
+    for i, kpi in enumerate(kpi_liste):
+        sc     = kpi["score"]
+        fb     = kpi_farbe(sc)
+        lb     = kpi_label(sc)
+        sc_str = str(sc) if sc is not None else "–"
+        gw_str = f"{kpi['gewicht']*100:.0f} %"
+        with cols[i]:
+            st.markdown(f"""
+            <div style="border:1px solid #30363d; border-radius:12px; padding:16px;
+                        text-align:center; background:#0d1117; margin:4px 0; min-height:195px">
+                <div style="color:#8b949e; font-size:0.72rem; margin-bottom:2px">{kpi['name']}</div>
+                <div style="color:#6e7681; font-size:0.65rem; margin-bottom:8px">{kpi['untertitel']}</div>
+                <div style="font-size:1.85rem; font-weight:700; color:#f0f6fc">{kpi['wert']}</div>
+                <div style="color:{fb}; font-weight:600; font-size:0.88rem; margin-top:8px">{lb}</div>
+                <div style="color:#8b949e; font-size:0.72rem; margin-top:4px">Score: {sc_str}/100</div>
+                <div style="color:#4CAF50; font-size:0.70rem; margin-top:4px">Gewicht: {gw_str}</div>
+            </div>
+            """, unsafe_allow_html=True)
+
+    st.divider()
+
+    st.subheader("🎯 Gesamtbewertung")
+    col_gauge, col_urteil = st.columns([1, 2])
+
+    with col_gauge:
+        if gesamt_score is not None:
+            fig_g = go.Figure(go.Indicator(
+                mode="gauge+number",
+                value=gesamt_score,
+                number={"suffix": "/100", "valueformat": ".1f"},
+                title={"text": "Bewertungsscore"},
+                gauge={
+                    "axis": {"range": [0, 100], "tickvals": [0, 38, 60, 100],
+                             "ticktext": ["0", "38", "60", "100"]},
+                    "bar": {"color": gesamt_farbe},
+                    "steps": [
+                        {"range": [0,  38], "color": "#00c853"},
+                        {"range": [38, 60], "color": "#ffd600"},
+                        {"range": [60, 100], "color": "#dd2c00"},
+                    ],
+                },
+            ))
+            fig_g.update_layout(height=240, margin=dict(t=40, b=0, l=10, r=10))
+            st.plotly_chart(fig_g, use_container_width=True)
+        else:
+            st.warning("Nicht genug Daten für einen Gesamtscore.")
+
+    with col_urteil:
+        gesamt_emoji = "🟢" if gesamt_label == "Unterbewertet" else ("🟡" if gesamt_label == "Fair bewertet" else "🔴")
+        score_display = f"{gesamt_score:.1f}/100" if gesamt_score is not None else "–"
+        st.markdown(f"""
+        <div style="border-left:5px solid {gesamt_farbe}; border-radius:8px;
+                    padding:20px; background:#0d1117; margin:10px 0">
+            <h2 style="color:{gesamt_farbe}; margin:0 0 10px 0">{gesamt_emoji} {gesamt_label}</h2>
+            <p style="color:#8b949e; margin:0 0 10px 0">
+                Gewichteter Score: <strong style="color:#f0f6fc">{score_display}</strong>
+                &nbsp;·&nbsp; Basis: <strong style="color:#f0f6fc">{anz_daten}</strong>/4 KPIs
+            </p>
+            <p style="color:#6e7681; font-size:0.78rem; margin:0">
+                ⚠️ Score &lt; 38 = Unterbewertet · 38–60 = Fair · &gt; 60 = Überbewertet
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+
+# ── TAB 2: Kursverlauf ────────────────────────────────────────────────────────
+with t2:
+    st.subheader("Kursverlauf – letzte 12 Monate")
+
+    if hist.empty:
+        st.warning("Keine historischen Kursdaten verfügbar.")
+    else:
+        hist["MA50"]  = hist["Close"].rolling(50).mean()
+        hist["MA200"] = hist["Close"].rolling(200).mean()
+
+        fig_c = go.Figure()
+        fig_c.add_trace(go.Candlestick(
+            x=hist.index, open=hist["Open"], high=hist["High"],
+            low=hist["Low"], close=hist["Close"], name="Kurs",
+        ))
+        fig_c.add_trace(go.Scatter(
+            x=hist.index, y=hist["MA50"],
+            name="50-Tage-Ø", line=dict(color="#ff9800", width=1.5),
+        ))
+        fig_c.add_trace(go.Scatter(
+            x=hist.index, y=hist["MA200"],
+            name="200-Tage-Ø", line=dict(color="#f44336", width=1.5),
+        ))
+        fig_c.update_layout(
+            xaxis_rangeslider_visible=False,
+            yaxis_title=f"Kurs ({waehrung})",
+            height=480,
+        )
+        st.plotly_chart(fig_c, use_container_width=True)
+
+        erster  = hist["Close"].iloc[0]
+        letzter = hist["Close"].iloc[-1]
+        rendite = (letzter - erster) / erster * 100
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Kurs vor 12 Monaten", f"{erster:,.2f} {waehrung}")
+        c2.metric("Aktueller Kurs",       f"{letzter:,.2f} {waehrung}")
+        c3.metric("1-Jahres-Performance", f"{rendite:.2f} %", delta=f"{rendite:.2f} %")
 
 # ─── Footer ───────────────────────────────────────────────────────────────────
 st.divider()
