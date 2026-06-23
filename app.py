@@ -7,7 +7,7 @@ import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
 import requests
-from openai import OpenAI
+from openai import OpenAI, RateLimitError
 from bs4 import BeautifulSoup
 from deep_translator import GoogleTranslator
 
@@ -24,6 +24,8 @@ if "ki_analyse" not in st.session_state:
     st.session_state.ki_analyse = None
 if "ki_ticker" not in st.session_state:
     st.session_state.ki_ticker = None
+if "ki_modell" not in st.session_state:
+    st.session_state.ki_modell = None
 
 def waehle_ticker(t):
     st.session_state.ticker = t
@@ -177,8 +179,15 @@ def kpi_label(score):
 # ─── KI-Analyse via OpenRouter ────────────────────────────────────────────────
 # Kostenloses Modell-Kontingent über OpenRouter (OpenAI-kompatible API), da die
 # Gemini-Free-Tier-Quota kontoabhängig sofort ausgeschöpft war und Anthropic
-# kostenpflichtiges Guthaben voraussetzt.
-KI_MODELL = "meta-llama/llama-3.3-70b-instruct:free"
+# kostenpflichtiges Guthaben voraussetzt. Mehrere :free-Modelle als Fallback,
+# da einzelne Modelle beim jeweiligen Upstream-Provider kurzfristig
+# überlastet sein können (429 Rate-Limit) – betrifft das Freikontingent
+# anderer Nutzer, nicht den eigenen API-Key.
+KI_MODELLE = [
+    "meta-llama/llama-3.3-70b-instruct:free",
+    "qwen/qwen3-next-80b-a3b-instruct:free",
+    "google/gemma-4-31b-it:free",
+]
 
 def erstelle_ki_analyse(api_key, name, ticker_sym, sektor, pe, roe, de, ebitda,
                         gesamt_score, gesamt_label, sp500_pe, sektor_pe):
@@ -240,11 +249,18 @@ Erstelle deine Analyse EXAKT in folgendem Format – weiche nicht davon ab:
 Antworte ausschließlich auf Deutsch. Halte dich strikt an das vorgegebene Format."""
 
     client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key)
-    response = client.chat.completions.create(
-        model=KI_MODELL,
-        messages=[{"role": "user", "content": prompt}],
-    )
-    return response.choices[0].message.content
+    letzter_fehler = None
+    for modell in KI_MODELLE:
+        try:
+            response = client.chat.completions.create(
+                model=modell,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return response.choices[0].message.content, modell
+        except RateLimitError as e:
+            letzter_fehler = e
+            continue
+    raise letzter_fehler
 
 # ─── Sidebar ──────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -604,7 +620,7 @@ with t2:
         if analyse_starten:
             with st.spinner("KI analysiert die Kennzahlen…"):
                 try:
-                    ergebnis = erstelle_ki_analyse(
+                    ergebnis, modell_verwendet = erstelle_ki_analyse(
                         api_key      = api_key,
                         name         = name_unt,
                         ticker_sym   = ticker,
@@ -620,6 +636,9 @@ with t2:
                     )
                     st.session_state.ki_analyse = ergebnis
                     st.session_state.ki_ticker  = ticker
+                    st.session_state.ki_modell  = modell_verwendet
+                except RateLimitError:
+                    st.error("❌ Alle kostenlosen KI-Modelle sind aktuell überlastet. Bitte in ca. 1 Minute erneut versuchen.")
                 except Exception as e:
                     st.error(f"❌ Fehler bei der KI-Analyse: {e}")
 
@@ -630,7 +649,7 @@ with t2:
         """, unsafe_allow_html=True)
         st.markdown(st.session_state.ki_analyse)
         st.markdown("</div>", unsafe_allow_html=True)
-        st.caption(f"⚠️ KI-Ausgabe nach festem Muster generiert. Kein Ersatz für professionelle Anlageberatung. Modell: {KI_MODELL} (via OpenRouter)")
+        st.caption(f"⚠️ KI-Ausgabe nach festem Muster generiert. Kein Ersatz für professionelle Anlageberatung. Modell: {st.session_state.ki_modell} (via OpenRouter)")
     elif not analyse_starten:
         st.info("Klicke auf **KI-Analyse starten**, um eine KI-gestützte Bewertung der Kennzahlen zu erhalten.")
 
