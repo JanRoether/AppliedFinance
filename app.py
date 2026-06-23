@@ -7,7 +7,7 @@ import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
 import requests
-from google import genai
+from openai import OpenAI
 from bs4 import BeautifulSoup
 from deep_translator import GoogleTranslator
 
@@ -174,11 +174,16 @@ def kpi_label(score):
     if score <= 60:   return "Fair bewertet"
     return "Überbewertet"
 
-# ─── KI-Analyse via Gemini API ────────────────────────────────────────────────
+# ─── KI-Analyse via OpenRouter ────────────────────────────────────────────────
+# Kostenloses Modell-Kontingent über OpenRouter (OpenAI-kompatible API), da die
+# Gemini-Free-Tier-Quota kontoabhängig sofort ausgeschöpft war und Anthropic
+# kostenpflichtiges Guthaben voraussetzt.
+KI_MODELL = "meta-llama/llama-3.3-70b-instruct:free"
+
 def erstelle_ki_analyse(api_key, name, ticker_sym, sektor, pe, roe, de, ebitda,
                         gesamt_score, gesamt_label, sp500_pe, sektor_pe):
     """
-    Ruft die Gemini API auf und liefert eine strukturierte Fundamentalanalyse.
+    Ruft ein KI-Modell über OpenRouter auf und liefert eine strukturierte Fundamentalanalyse.
     Das Ausgabeformat ist fest vorgegeben, damit alle Analysen einheitlich sind.
     """
     pe_str     = f"{pe:.1f}x"               if not ist_ungueltig(pe)     else "nicht verfügbar"
@@ -234,12 +239,12 @@ Erstelle deine Analyse EXAKT in folgendem Format – weiche nicht davon ab:
 
 Antworte ausschließlich auf Deutsch. Halte dich strikt an das vorgegebene Format."""
 
-    client = genai.Client(api_key=api_key)
-    response = client.models.generate_content(
-        model="gemini-2.0-flash",
-        contents=prompt,
+    client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key)
+    response = client.chat.completions.create(
+        model=KI_MODELL,
+        messages=[{"role": "user", "content": prompt}],
     )
-    return response.text
+    return response.choices[0].message.content
 
 # ─── Sidebar ──────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -577,14 +582,14 @@ with t2:
     st.caption("Die KI bewertet die vier Kennzahlen nach einem festen Ausgabemuster für einheitliche, vergleichbare Analysen.")
 
     try:
-        api_key = st.secrets.get("GEMINI_API_KEY")
+        api_key = st.secrets.get("OPENROUTER_API_KEY")
     except Exception:
         api_key = None
 
     if not api_key:
         api_key = st.text_input(
-            "Gemini API-Key", type="password",
-            help="Erforderlich für die KI-Analyse. Kostenlos erhältlich unter aistudio.google.com"
+            "OpenRouter API-Key", type="password",
+            help="Erforderlich für die KI-Analyse. Kostenlos erhältlich unter openrouter.ai/keys"
         )
 
     analyse_starten = st.button("🤖 KI-Analyse starten", type="primary",
@@ -597,7 +602,7 @@ with t2:
 
     if api_key and (st.session_state.ki_ticker != ticker or st.session_state.ki_analyse is None):
         if analyse_starten:
-            with st.spinner("Gemini analysiert die Kennzahlen…"):
+            with st.spinner("KI analysiert die Kennzahlen…"):
                 try:
                     ergebnis = erstelle_ki_analyse(
                         api_key      = api_key,
@@ -625,7 +630,7 @@ with t2:
         """, unsafe_allow_html=True)
         st.markdown(st.session_state.ki_analyse)
         st.markdown("</div>", unsafe_allow_html=True)
-        st.caption("⚠️ KI-Ausgabe nach festem Muster generiert. Kein Ersatz für professionelle Anlageberatung. Modell: gemini-2.0-flash")
+        st.caption(f"⚠️ KI-Ausgabe nach festem Muster generiert. Kein Ersatz für professionelle Anlageberatung. Modell: {KI_MODELL} (via OpenRouter)")
     elif not analyse_starten:
         st.info("Klicke auf **KI-Analyse starten**, um eine KI-gestützte Bewertung der Kennzahlen zu erhalten.")
 
@@ -673,5 +678,5 @@ st.divider()
 st.caption(
     "⚠️ **Haftungsausschluss:** Diese App dient ausschließlich zu Bildungszwecken und stellt keine "
     "Anlageberatung dar. Finanzdaten: yfinance · Marktbenchmarks: multpl.com & finviz.com (BeautifulSoup) · "
-    "KI-Analyse: Google Gemini."
+    "KI-Analyse: Llama 3.3 (über OpenRouter)."
 )
