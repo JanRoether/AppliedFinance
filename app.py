@@ -18,7 +18,7 @@ st.set_page_config(
     layout="wide"
 )
 
-# ─── Session State ────────────────────────────────────────────────────────────
+# Session State
 if "ticker" not in st.session_state:
     st.session_state.ticker = ""
 if "ki_analyse" not in st.session_state:
@@ -31,7 +31,9 @@ if "ki_modell" not in st.session_state:
 def waehle_ticker(t):
     st.session_state.ticker = t
 
-# ─── Hilfsfunktionen ──────────────────────────────────────────────────────────
+
+# Hilfsfunktionen
+
 def fmt_gross(wert):
     if wert is None or (isinstance(wert, float) and pd.isna(wert)):
         return "–"
@@ -55,12 +57,11 @@ def uebersetze_de(text: str) -> str:
 def ist_ungueltig(wert):
     return wert is None or (isinstance(wert, float) and pd.isna(wert))
 
-# ─── BeautifulSoup Web Scraping ───────────────────────────────────────────────
-# Zweite Datenquelle neben yfinance: Markt- und Sektor-P/E-Benchmarks werden
-# direkt von Finanzportalen gescrapt, um die KPI-Bewertung einzuordnen.
+
+# Web Scraping: Markt- und Sektor-P/E als Benchmark-Referenzwerte
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def scrape_sp500_pe():
-    """Scrapt den aktuellen S&P 500 P/E-Ratio von multpl.com als Marktbenchmark."""
     try:
         url = "https://www.multpl.com/s-p-500-pe-ratio"
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
@@ -78,7 +79,6 @@ def scrape_sp500_pe():
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def scrape_sektor_pe():
-    """Scrapt Sektor-P/E-Benchmarks von finviz.com als kontextbezogene Vergleichswerte."""
     benchmarks = {}
     try:
         url = "https://finviz.com/groups.ashx?g=sector&v=120"
@@ -101,9 +101,9 @@ def scrape_sektor_pe():
         pass
     return benchmarks
 
-# ─── KPI-Scoring (Score 0–100) ────────────────────────────────────────────────
-# Vier fundamentale Kennzahlen, jede wird auf eine Skala von 0 (unterbewertet)
-# bis 100 (überbewertet) abgebildet und anschließend gewichtet kombiniert.
+
+# Scoring: jede Kennzahl wird auf 0–100 abgebildet (0 = günstig, 100 = teuer)
+
 def score_pe(wert):
     if ist_ungueltig(wert) or wert <= 0:
         return None
@@ -131,6 +131,7 @@ def score_roe(wert):
 def score_de(wert):
     if ist_ungueltig(wert):
         return None
+    # yfinance liefert D/E teils als Prozent (>5), teils als Dezimal
     de = wert / 100 if abs(wert) > 5 else wert
     if de < 0:    return 90
     if de < 0.25: return 14
@@ -177,10 +178,9 @@ def kpi_label(score):
     if score <= 60:   return "Fair bewertet"
     return "Überbewertet"
 
-# ─── KI-Analyse via HuggingFace Transformers ─────────────────────────────────
-# Qwen2.5-1.5B-Instruct: echtes mehrsprachiges Modell mit zuverlässiger
-# Deutschausgabe. TinyLlama ist primär englisch und ignoriert deutsche Anweisungen.
-# Kein API-Key erforderlich – läuft vollständig lokal (~1,5 GB beim Erstdownload).
+
+# KI-Analyse: lokales Text-Generation-Modell via HuggingFace Transformers
+# Qwen2.5 läuft vollständig lokal, kein API-Key nötig (~1,5 GB beim Erststart)
 HF_MODELL = "Qwen/Qwen2.5-1.5B-Instruct"
 
 @st.cache_resource(show_spinner=False)
@@ -198,7 +198,7 @@ def erstelle_ki_analyse(name, ticker_sym, sektor, pe, roe, de, ebitda,
     sektor_str = f"{sektor_pe:.1f}x" if sektor_pe                 else "N/A"
     score_str  = f"{gesamt_score:.1f}/100" if gesamt_score is not None else "N/A"
 
-    # ChatML-Format (Qwen2.5)
+    # ChatML-Format für Qwen2.5-Instruct
     system_msg = "Du bist ein erfahrener Finanzanalyst. Antworte ausschließlich auf Deutsch."
     user_msg = (
         f"Analysiere die Aktie {name} ({ticker_sym}) aus dem Sektor {sektor}.\n\n"
@@ -232,9 +232,10 @@ def erstelle_ki_analyse(name, ticker_sym, sektor, pe, roe, de, ebitda,
     )
     return output[0]["generated_text"].strip(), HF_MODELL
 
-# ─── Sidebar ──────────────────────────────────────────────────────────────────
+
+# Sidebar
 with st.sidebar:
-    st.title("📈 Aktien Analyse")
+    st.title("Aktien Analyse")
     st.markdown("---")
     ticker_eingabe = st.text_input(
         "Ticker-Symbol",
@@ -248,16 +249,16 @@ with st.sidebar:
     st.button("Analysieren", type="primary", use_container_width=True)
 
     st.markdown("---")
-    st.markdown("### ⚖️ KPI-Gewichtung")
+    st.markdown("### KPI-Gewichtung")
     st.caption("Passe die Gewichtung an den Sektor an. Wird automatisch auf 100 % normalisiert.")
 
-    w_pe     = st.slider("📊 P/E Ratio",  0, 100, 35, step=5,
+    w_pe     = st.slider("P/E Ratio",  0, 100, 35, step=5,
                          help="Universellste Bewertungskennzahl — Standard: 35 %")
-    w_roe    = st.slider("💹 ROE",         0, 100, 25, step=5,
+    w_roe    = st.slider("ROE",        0, 100, 25, step=5,
                          help="Qualitätsmerkmal des Geschäftsmodells — Standard: 25 %")
-    w_de     = st.slider("🏦 D/E Ratio",   0, 100, 15, step=5,
+    w_de     = st.slider("D/E Ratio",  0, 100, 15, step=5,
                          help="Verschuldungsrisiko (sektorsensitiv) — Standard: 15 %")
-    w_ebitda = st.slider("📈 EV/EBITDA",   0, 100, 25, step=5,
+    w_ebitda = st.slider("EV/EBITDA",  0, 100, 25, step=5,
                          help="Kapitalstruktur-neutrale Bewertung — Standard: 25 %")
 
     gesamt_w = w_pe + w_roe + w_de + w_ebitda
@@ -302,8 +303,8 @@ with st.sidebar:
 
 ticker = st.session_state.ticker
 
-# ─── Hauptbereich ─────────────────────────────────────────────────────────────
-st.title("📈 Aktien KPI Analyser")
+# Hauptbereich
+st.title("Aktien KPI Analyser")
 
 if not ticker:
     st.markdown("""
@@ -335,7 +336,7 @@ if not info or not any(info.get(k) for k in ("quoteType", "longName", "shortName
     st.error(f"Keine Daten für **{ticker}** gefunden. Bitte Ticker-Symbol prüfen.")
     st.stop()
 
-# ─── Unternehmens-Header ──────────────────────────────────────────────────────
+# Unternehmens-Header
 name_unt = info.get("longName", ticker)
 sektor   = info.get("sector", "–")
 branche  = info.get("industry", "–")
@@ -350,7 +351,7 @@ sektor_pe_ref = sektor_pe_dict.get(sektor)
 
 col_h1, col_h2 = st.columns([3, 2])
 with col_h1:
-    st.subheader(f"🏢 {name_unt}  ({ticker})")
+    st.subheader(f"{name_unt}  ({ticker})")
     st.markdown(f"**Sektor:** {sektor}  |  **Branche:** {branche}  |  **Land:** {land}")
     beschr_en = info.get("longBusinessSummary", "")
     if beschr_en:
@@ -367,15 +368,15 @@ with col_h2:
     if mktcap:
         m2.metric("Marktkapitalisierung", fmt_gross(mktcap))
     if hoch_52w and tief_52w:
-        st.markdown(f"📏 **52-Wochen-Spanne:** {tief_52w:,.2f} – {hoch_52w:,.2f}")
+        st.markdown(f"**52-Wochen-Spanne:** {tief_52w:,.2f} – {hoch_52w:,.2f}")
     if sp500_pe:
-        st.markdown(f"📊 **S&P 500 P/E (Markt):** {sp500_pe:.1f}x")
+        st.markdown(f"**S&P 500 P/E:** {sp500_pe:.1f}x")
     if sektor_pe_ref:
-        st.markdown(f"🏭 **Sektor-P/E ({sektor}):** {sektor_pe_ref:.1f}x")
+        st.markdown(f"**Sektor-P/E ({sektor}):** {sektor_pe_ref:.1f}x")
 
 st.divider()
 
-# ─── KPI-Werte ────────────────────────────────────────────────────────────────
+# KPI-Werte aus yfinance laden und Scores berechnen
 pe_wert     = info.get("trailingPE")
 roe_wert    = info.get("returnOnEquity")
 de_wert     = info.get("debtToEquity")
@@ -423,18 +424,17 @@ kpi_liste = [
      "ref": "Marktdurchschnitt: ~12–16x"},
 ]
 
-# ─── Tabs ─────────────────────────────────────────────────────────────────────
 t1, t2, t3 = st.tabs([
-    "🎯 Fundamentalbewertung",
+    "Fundamentalbewertung",
     "🤖 KI-Analyse",
-    "📉 Kursverlauf",
+    "Kursverlauf",
 ])
 
-# ── TAB 1: Fundamentalbewertung ───────────────────────────────────────────────
+# Tab 1: Fundamentalbewertung
 with t1:
     st.subheader("Fundamentalbewertung")
 
-    with st.expander("ℹ️ Methodik & Begründung der KPI-Auswahl"):
+    with st.expander("Methodik & KPI-Auswahl"):
         markt_zeile = f"Referenz: Benjamin Grahams Schwelle <15x, aktueller Markt {sp500_pe:.1f}x." if sp500_pe else "Historischer Marktdurchschnitt ~17–22x."
         st.markdown(f"""
 **Bewertungsmodell – 4 KPIs der Fundamentalanalyse**
@@ -471,11 +471,11 @@ with t1:
             </div>
             """, unsafe_allow_html=True)
             st.caption(kpi["beschr"])
-            st.caption(f"📊 {kpi['ref']}")
+            st.caption(kpi["ref"])
 
     st.divider()
 
-    st.subheader("🎯 Gesamtbewertung")
+    st.subheader("Gesamtbewertung")
     col_gauge, col_urteil = st.columns([1, 2])
 
     with col_gauge:
@@ -562,9 +562,9 @@ with t1:
                               yaxis=dict(range=[0, 105], title="Score"), height=300)
         st.plotly_chart(fig_bar, use_container_width=True)
 
-# ── TAB 2: KI-Analyse ─────────────────────────────────────────────────────────
+# Tab 2: KI-Analyse
 with t2:
-    st.subheader("🤖 KI-gestützte Fundamentalanalyse")
+    st.subheader("KI-gestützte Fundamentalanalyse")
     st.caption(f"Lokales Text-Generation-Modell ({HF_MODELL}) via HuggingFace Transformers – kein API-Key erforderlich.")
 
     st.info(
@@ -574,7 +574,7 @@ with t2:
         icon="ℹ️",
     )
 
-    analyse_starten = st.button("🤖 KI-Analyse starten", type="primary")
+    analyse_starten = st.button("KI-Analyse starten", type="primary")
 
     if analyse_starten:
         st.session_state.ki_analyse = None
@@ -614,7 +614,7 @@ with t2:
     elif not analyse_starten:
         st.info("Klicke auf **KI-Analyse starten**, um eine KI-gestützte Bewertung der Kennzahlen zu erhalten.")
 
-# ── TAB 3: Kursverlauf ────────────────────────────────────────────────────────
+# Tab 3: Kursverlauf
 with t3:
     st.subheader("Kursverlauf – letzte 12 Monate")
 
@@ -653,7 +653,7 @@ with t3:
         c2.metric("Aktueller Kurs",       f"{letzter:,.2f} {waehrung}")
         c3.metric("1-Jahres-Performance", f"{rendite:.2f} %", delta=f"{rendite:.2f} %")
 
-# ─── Footer ───────────────────────────────────────────────────────────────────
+# Footer
 st.divider()
 st.caption(
     "⚠️ **Haftungsausschluss:** Diese App dient ausschließlich zu Bildungszwecken und stellt keine "
