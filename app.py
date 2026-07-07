@@ -653,10 +653,3 @@ with t3:
         c2.metric("Aktueller Kurs",       f"{letzter:,.2f} {waehrung}")
         c3.metric("1-Jahres-Performance", f"{rendite:.2f} %", delta=f"{rendite:.2f} %")
 
-# Footer
-st.divider()
-st.caption(
-    "⚠️ **Haftungsausschluss:** Diese App dient ausschließlich zu Bildungszwecken und stellt keine "
-    "Anlageberatung dar. Finanzdaten: yfinance · Marktbenchmarks: multpl.com & finviz.com (BeautifulSoup) · "
-    f"KI-Analyse: {HF_MODELL} (HuggingFace Transformers, lokal)."
-)
