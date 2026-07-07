@@ -11,19 +11,14 @@ Uni-Projekt im Kurs *Applied Finance*.
 - **KI-Analyse** – lokales Text-Generation-Modell (Qwen2.5-1.5B-Instruct via HuggingFace Transformers) erstellt eine deutsche Fundamentalanalyse, kein API-Key erforderlich
 - **Kursverlauf** – Candlestick-Chart mit 50- und 200-Tage-Gleitdurchschnitt
 
-## Installation
+## Installation & Starten
 
 ```bash
-pip install -r requirements.txt
+uv sync
+uv run streamlit run app.py
 ```
 
 Beim ersten Start der KI-Analyse wird das Modell (~1,5 GB) automatisch von HuggingFace heruntergeladen.
-
-## Starten
-
-```bash
-streamlit run app.py
-```
 
 ## Datenquellen
 
