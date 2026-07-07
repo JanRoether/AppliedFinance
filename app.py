@@ -7,7 +7,8 @@ import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
 import requests
-from openai import OpenAI, RateLimitError
+import torch
+from transformers import pipeline
 from bs4 import BeautifulSoup
 from deep_translator import GoogleTranslator
 
@@ -176,91 +177,57 @@ def kpi_label(score):
     if score <= 60:   return "Fair bewertet"
     return "Überbewertet"
 
-# ─── KI-Analyse via OpenRouter ────────────────────────────────────────────────
-# Kostenloses Modell-Kontingent über OpenRouter (OpenAI-kompatible API), da die
-# Gemini-Free-Tier-Quota kontoabhängig sofort ausgeschöpft war und Anthropic
-# kostenpflichtiges Guthaben voraussetzt. Mehrere :free-Modelle als Fallback,
-# da einzelne Modelle beim jeweiligen Upstream-Provider kurzfristig
-# überlastet sein können (429 Rate-Limit) – betrifft das Freikontingent
-# anderer Nutzer, nicht den eigenen API-Key.
-KI_MODELLE = [
-    "meta-llama/llama-3.3-70b-instruct:free",
-    "qwen/qwen3-next-80b-a3b-instruct:free",
-    "google/gemma-4-31b-it:free",
-]
+# ─── KI-Analyse via HuggingFace Transformers ─────────────────────────────────
+# Lokales Text-Generation-Modell (TinyLlama 1.1B) über die transformers-Library.
+# Kein API-Key erforderlich – das Modell läuft vollständig lokal.
+# Beim ersten Start wird das Modell (~1,1 GB) von HuggingFace heruntergeladen
+# und anschließend im Cache gespeichert, sodass Folgestarts schnell sind.
+HF_MODELL = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
 
-def erstelle_ki_analyse(api_key, name, ticker_sym, sektor, pe, roe, de, ebitda,
+@st.cache_resource(show_spinner=False)
+def lade_ki_modell():
+    device = 0 if torch.cuda.is_available() else -1
+    return pipeline("text-generation", model=HF_MODELL, device=device)
+
+def erstelle_ki_analyse(name, ticker_sym, sektor, pe, roe, de, ebitda,
                         gesamt_score, gesamt_label, sp500_pe, sektor_pe):
-    """
-    Ruft ein KI-Modell über OpenRouter auf und liefert eine strukturierte Fundamentalanalyse.
-    Das Ausgabeformat ist fest vorgegeben, damit alle Analysen einheitlich sind.
-    """
-    pe_str     = f"{pe:.1f}x"               if not ist_ungueltig(pe)     else "nicht verfügbar"
-    roe_str    = f"{roe*100:.1f} %"          if not ist_ungueltig(roe)    else "nicht verfügbar"
-    de_str     = f"{de:.1f} %"              if not ist_ungueltig(de)     else "nicht verfügbar"
-    ebitda_str = f"{ebitda:.1f}x"           if not ist_ungueltig(ebitda) else "nicht verfügbar"
-    markt_str  = f"{sp500_pe:.1f}x"         if sp500_pe                  else "nicht verfügbar"
-    sektor_str = f"{sektor_pe:.1f}x"        if sektor_pe                 else "nicht verfügbar"
-    score_str  = f"{gesamt_score:.1f}/100"  if gesamt_score is not None  else "nicht berechnet"
+    pe_str     = f"{pe:.1f}x"        if not ist_ungueltig(pe)     else "N/A"
+    roe_str    = f"{roe*100:.1f}%"   if not ist_ungueltig(roe)    else "N/A"
+    de_str     = f"{de:.1f}%"        if not ist_ungueltig(de)     else "N/A"
+    ebitda_str = f"{ebitda:.1f}x"    if not ist_ungueltig(ebitda) else "N/A"
+    markt_str  = f"{sp500_pe:.1f}x"  if sp500_pe                  else "N/A"
+    sektor_str = f"{sektor_pe:.1f}x" if sektor_pe                 else "N/A"
+    score_str  = f"{gesamt_score:.1f}/100" if gesamt_score is not None else "N/A"
 
-    prompt = f"""Du bist ein erfahrener Finanzanalyst. Analysiere die folgende Aktie anhand der bereitgestellten Fundamentalkennzahlen und erstelle eine strukturierte Bewertung.
+    # ChatML-Format (TinyLlama)
+    system_msg = "Du bist ein erfahrener Finanzanalyst. Antworte ausschließlich auf Deutsch."
+    user_msg = (
+        f"Analysiere die Aktie {name} ({ticker_sym}) aus dem Sektor {sektor}.\n\n"
+        f"Fundamentalkennzahlen:\n"
+        f"- P/E Ratio: {pe_str} (Markt: {markt_str}, Sektor: {sektor_str})\n"
+        f"- ROE (Eigenkapitalrendite): {roe_str} | Benchmark: >15% gut\n"
+        f"- D/E Ratio (Verschuldungsgrad): {de_str} | Benchmark: <100% konservativ\n"
+        f"- EV/EBITDA: {ebitda_str} | Marktdurchschnitt: ~12–16x\n"
+        f"- Gesamtbewertung: {gesamt_label} (Score: {score_str})\n\n"
+        f"Erstelle eine strukturierte Fundamentalanalyse auf Deutsch mit:\n"
+        f"1. Kurze Einschätzung jeder Kennzahl\n"
+        f"2. Stärken und Schwächen des Unternehmens\n"
+        f"3. Wesentliche Risiken (3 Punkte)\n"
+        f"4. Fazit mit Bewertungsurteil"
+    )
+    prompt = f"<|system|>\n{system_msg}\n</s>\n<|user|>\n{user_msg}\n</s>\n<|assistant|>\n"
 
-**Unternehmen:** {name} ({ticker_sym})
-**Sektor:** {sektor}
-
-**Fundamentalkennzahlen:**
-- P/E Ratio (Kurs-Gewinn-Verhältnis): {pe_str} | S&P 500 Durchschnitt: {markt_str} | Sektor-Durchschnitt: {sektor_str}
-- ROE (Eigenkapitalrendite): {roe_str} | Benchmark: >15 % gilt als gut
-- D/E Ratio (Verschuldungsgrad): {de_str} | Benchmark: <100 % gilt als konservativ
-- EV/EBITDA: {ebitda_str} | Marktdurchschnitt: ~12–16x
-
-**Modellbewertung:** {gesamt_label} (Score: {score_str})
-
-Erstelle deine Analyse EXAKT in folgendem Format – weiche nicht davon ab:
-
-## KI-Fundamentalanalyse: {name} ({ticker_sym})
-
-### 1. Kennzahlenanalyse
-
-**P/E Ratio ({pe_str}):**
-[2–3 Sätze: Einschätzung des P/E im Vergleich zum Markt- und Sektordurchschnitt. Ist die Aktie teuer oder günstig bewertet?]
-
-**ROE ({roe_str}):**
-[2–3 Sätze: Einschätzung der Eigenkapitalrendite. Wie effizient arbeitet das Unternehmen mit dem Eigenkapital?]
-
-**D/E Ratio ({de_str}):**
-[2–3 Sätze: Einschätzung des Verschuldungsgrads. Welches Finanzierungsrisiko ergibt sich daraus?]
-
-**EV/EBITDA ({ebitda_str}):**
-[2–3 Sätze: Einschätzung des EV/EBITDA. Was sagt dieser Wert über die Bewertung unabhängig von der Kapitalstruktur aus?]
-
-### 2. Gesamteinschätzung
-[3–4 Sätze: Zusammenfassung aller vier Kennzahlen. Wo liegen Stärken, wo Schwächen?]
-
-### 3. Wesentliche Risiken
-- [Risiko 1 mit kurzer Begründung]
-- [Risiko 2 mit kurzer Begründung]
-- [Risiko 3 mit kurzer Begründung]
-
-### 4. Fazit
-**Bewertungsurteil: {gesamt_label}**
-[1–2 abschließende Sätze zur Einordnung. Hinweis: Diese Analyse ersetzt keine professionelle Anlageberatung.]
-
-Antworte ausschließlich auf Deutsch. Halte dich strikt an das vorgegebene Format."""
-
-    client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key)
-    letzter_fehler = None
-    for modell in KI_MODELLE:
-        try:
-            response = client.chat.completions.create(
-                model=modell,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            return response.choices[0].message.content, modell
-        except RateLimitError as e:
-            letzter_fehler = e
-            continue
-    raise letzter_fehler
+    ki = lade_ki_modell()
+    output = ki(
+        prompt,
+        max_new_tokens=450,
+        do_sample=True,
+        temperature=0.7,
+        top_p=0.9,
+        repetition_penalty=1.1,
+        return_full_text=False,
+    )
+    return output[0]["generated_text"].strip(), HF_MODELL
 
 # ─── Sidebar ──────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -595,33 +562,26 @@ with t1:
 # ── TAB 2: KI-Analyse ─────────────────────────────────────────────────────────
 with t2:
     st.subheader("🤖 KI-gestützte Fundamentalanalyse")
-    st.caption("Die KI bewertet die vier Kennzahlen nach einem festen Ausgabemuster für einheitliche, vergleichbare Analysen.")
+    st.caption(f"Lokales Text-Generation-Modell ({HF_MODELL}) via HuggingFace Transformers – kein API-Key erforderlich.")
 
-    try:
-        api_key = st.secrets.get("OPENROUTER_API_KEY")
-    except Exception:
-        api_key = None
+    st.info(
+        "**Hinweis:** Beim ersten Start wird das Modell (~1,1 GB) von HuggingFace heruntergeladen "
+        "und lokal gespeichert. Folgestarts nutzen den Cache und sind deutlich schneller. "
+        "Die Inferenz läuft auf der CPU und dauert ca. 1–3 Minuten.",
+        icon="ℹ️",
+    )
 
-    if not api_key:
-        api_key = st.text_input(
-            "OpenRouter API-Key", type="password",
-            help="Erforderlich für die KI-Analyse. Kostenlos erhältlich unter openrouter.ai/keys"
-        )
+    analyse_starten = st.button("🤖 KI-Analyse starten", type="primary")
 
-    analyse_starten = st.button("🤖 KI-Analyse starten", type="primary",
-                                disabled=not api_key)
-
-    # Analyse nur neu generieren wenn Ticker sich geändert hat oder Button geklickt
-    if analyse_starten and api_key:
-        st.session_state.ki_analyse = None  # Cache löschen bei neuem Klick
+    if analyse_starten:
+        st.session_state.ki_analyse = None
         st.session_state.ki_ticker  = None
 
-    if api_key and (st.session_state.ki_ticker != ticker or st.session_state.ki_analyse is None):
+    if st.session_state.ki_ticker != ticker or st.session_state.ki_analyse is None:
         if analyse_starten:
-            with st.spinner("KI analysiert die Kennzahlen…"):
+            with st.spinner("Modell wird geladen und Analyse wird erstellt – das kann beim ersten Mal einige Minuten dauern…"):
                 try:
                     ergebnis, modell_verwendet = erstelle_ki_analyse(
-                        api_key      = api_key,
                         name         = name_unt,
                         ticker_sym   = ticker,
                         sektor       = sektor,
@@ -637,8 +597,6 @@ with t2:
                     st.session_state.ki_analyse = ergebnis
                     st.session_state.ki_ticker  = ticker
                     st.session_state.ki_modell  = modell_verwendet
-                except RateLimitError:
-                    st.error("❌ Alle kostenlosen KI-Modelle sind aktuell überlastet. Bitte in ca. 1 Minute erneut versuchen.")
                 except Exception as e:
                     st.error(f"❌ Fehler bei der KI-Analyse: {e}")
 
@@ -649,7 +607,7 @@ with t2:
         """, unsafe_allow_html=True)
         st.markdown(st.session_state.ki_analyse)
         st.markdown("</div>", unsafe_allow_html=True)
-        st.caption(f"⚠️ KI-Ausgabe nach festem Muster generiert. Kein Ersatz für professionelle Anlageberatung. Modell: {st.session_state.ki_modell} (via OpenRouter)")
+        st.caption(f"⚠️ KI-Ausgabe mit lokalem Modell generiert. Kein Ersatz für professionelle Anlageberatung. Modell: {st.session_state.ki_modell} (HuggingFace Transformers)")
     elif not analyse_starten:
         st.info("Klicke auf **KI-Analyse starten**, um eine KI-gestützte Bewertung der Kennzahlen zu erhalten.")
 
@@ -697,5 +655,5 @@ st.divider()
 st.caption(
     "⚠️ **Haftungsausschluss:** Diese App dient ausschließlich zu Bildungszwecken und stellt keine "
     "Anlageberatung dar. Finanzdaten: yfinance · Marktbenchmarks: multpl.com & finviz.com (BeautifulSoup) · "
-    "KI-Analyse: Llama 3.3 (über OpenRouter)."
+    f"KI-Analyse: {HF_MODELL} (HuggingFace Transformers, lokal)."
 )
