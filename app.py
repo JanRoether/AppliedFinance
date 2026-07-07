@@ -178,11 +178,10 @@ def kpi_label(score):
     return "Überbewertet"
 
 # ─── KI-Analyse via HuggingFace Transformers ─────────────────────────────────
-# Lokales Text-Generation-Modell (TinyLlama 1.1B) über die transformers-Library.
-# Kein API-Key erforderlich – das Modell läuft vollständig lokal.
-# Beim ersten Start wird das Modell (~1,1 GB) von HuggingFace heruntergeladen
-# und anschließend im Cache gespeichert, sodass Folgestarts schnell sind.
-HF_MODELL = "TinyLlama/TinyLlama-1.1B-Chat-v1.0"
+# Qwen2.5-1.5B-Instruct: echtes mehrsprachiges Modell mit zuverlässiger
+# Deutschausgabe. TinyLlama ist primär englisch und ignoriert deutsche Anweisungen.
+# Kein API-Key erforderlich – läuft vollständig lokal (~1,5 GB beim Erstdownload).
+HF_MODELL = "Qwen/Qwen2.5-1.5B-Instruct"
 
 @st.cache_resource(show_spinner=False)
 def lade_ki_modell():
@@ -199,7 +198,7 @@ def erstelle_ki_analyse(name, ticker_sym, sektor, pe, roe, de, ebitda,
     sektor_str = f"{sektor_pe:.1f}x" if sektor_pe                 else "N/A"
     score_str  = f"{gesamt_score:.1f}/100" if gesamt_score is not None else "N/A"
 
-    # ChatML-Format (TinyLlama)
+    # ChatML-Format (Qwen2.5)
     system_msg = "Du bist ein erfahrener Finanzanalyst. Antworte ausschließlich auf Deutsch."
     user_msg = (
         f"Analysiere die Aktie {name} ({ticker_sym}) aus dem Sektor {sektor}.\n\n"
@@ -215,7 +214,11 @@ def erstelle_ki_analyse(name, ticker_sym, sektor, pe, roe, de, ebitda,
         f"3. Wesentliche Risiken (3 Punkte)\n"
         f"4. Fazit mit Bewertungsurteil"
     )
-    prompt = f"<|system|>\n{system_msg}\n</s>\n<|user|>\n{user_msg}\n</s>\n<|assistant|>\n"
+    prompt = (
+        f"<|im_start|>system\n{system_msg}<|im_end|>\n"
+        f"<|im_start|>user\n{user_msg}<|im_end|>\n"
+        f"<|im_start|>assistant\n"
+    )
 
     ki = lade_ki_modell()
     output = ki(
@@ -565,7 +568,7 @@ with t2:
     st.caption(f"Lokales Text-Generation-Modell ({HF_MODELL}) via HuggingFace Transformers – kein API-Key erforderlich.")
 
     st.info(
-        "**Hinweis:** Beim ersten Start wird das Modell (~1,1 GB) von HuggingFace heruntergeladen "
+        "**Hinweis:** Beim ersten Start wird das Modell (~1,5 GB) von HuggingFace heruntergeladen "
         "und lokal gespeichert. Folgestarts nutzen den Cache und sind deutlich schneller. "
         "Die Inferenz läuft auf der CPU und dauert ca. 1–3 Minuten.",
         icon="ℹ️",
