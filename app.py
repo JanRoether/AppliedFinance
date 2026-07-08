@@ -463,8 +463,6 @@ with t1:
     cols = st.columns(4)
     for i, kpi in enumerate(kpi_liste):
         sc     = kpi["score"]
-        fb     = kpi_farbe(sc)
-        lb     = kpi_label(sc)
         sc_str = str(sc) if sc is not None else "–"
         gw_str = f"{kpi['gewicht']*100:.0f} %"
         with cols[i]:
@@ -474,8 +472,7 @@ with t1:
                 <div style="color:#8b949e; font-size:0.72rem; margin-bottom:2px">{kpi['name']}</div>
                 <div style="color:#6e7681; font-size:0.65rem; margin-bottom:8px">{kpi['untertitel']}</div>
                 <div style="font-size:1.85rem; font-weight:700; color:#f0f6fc">{kpi['wert']}</div>
-                <div style="color:{fb}; font-weight:600; font-size:0.88rem; margin-top:8px">{lb}</div>
-                <div style="color:#8b949e; font-size:0.72rem; margin-top:4px">Score: {sc_str}/100</div>
+                <div style="color:#8b949e; font-size:0.72rem; margin-top:12px">Score: {sc_str}/100</div>
                 <div style="color:#4CAF50; font-size:0.70rem; margin-top:4px">Gewicht: {gw_str}</div>
             </div>
             """, unsafe_allow_html=True)
