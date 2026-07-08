@@ -27,6 +27,11 @@ if "ki_ticker" not in st.session_state:
     st.session_state.ki_ticker = None
 if "ki_modell" not in st.session_state:
     st.session_state.ki_modell = None
+if "periode" not in st.session_state:
+    st.session_state.periode = "1y"
+
+PERIODEN = {"1 Monat": "1mo", "6 Monate": "6mo", "1 Jahr": "1y",
+            "2 Jahre": "2y", "5 Jahre": "5y", "Max.": "max"}
 
 def waehle_ticker(t):
     st.session_state.ticker = t
@@ -246,6 +251,10 @@ with st.sidebar:
     if ticker_eingabe.strip().upper() != st.session_state.ticker:
         st.session_state.ticker = ticker_eingabe.strip().upper()
 
+    periode_label = st.selectbox("Analysezeitraum", list(PERIODEN.keys()), index=2)
+    periode = PERIODEN[periode_label]
+    st.session_state.periode = periode
+
     st.button("Analysieren", type="primary", use_container_width=True)
 
     st.markdown("---")
@@ -327,7 +336,7 @@ with st.spinner(f"Lade Finanzdaten für **{ticker}** via yfinance…"):
     try:
         stock = yf.Ticker(ticker)
         info  = stock.info
-        hist  = stock.history(period="1y")
+        hist  = stock.history(period=periode)
     except Exception as e:
         st.error(f"Fehler beim Laden der yfinance-Daten: {e}")
         st.stop()
@@ -616,7 +625,7 @@ with t2:
 
 # Tab 3: Kursverlauf
 with t3:
-    st.subheader("Kursverlauf – letzte 12 Monate")
+    st.subheader(f"Kursverlauf – {periode_label}")
 
     if hist.empty:
         st.warning("Keine historischen Kursdaten verfügbar.")
