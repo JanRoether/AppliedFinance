@@ -251,7 +251,8 @@ with st.sidebar:
     if ticker_eingabe.strip().upper() != st.session_state.ticker:
         st.session_state.ticker = ticker_eingabe.strip().upper()
 
-    periode_label = st.selectbox("Analysezeitraum", list(PERIODEN.keys()), index=2)
+    periode_label = st.selectbox("Zeitraum Kursverlauf", list(PERIODEN.keys()), index=2)
+    st.caption("Wirkt sich nur auf den Kursverlauf-Tab aus. Fundamentalkennzahlen basieren stets auf den aktuellsten verfügbaren Finanzdaten.")
     periode = PERIODEN[periode_label]
     st.session_state.periode = periode
 
